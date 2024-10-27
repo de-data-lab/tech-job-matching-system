@@ -16,10 +16,13 @@ import cohere
 from chromadb.utils import embedding_functions
 from parse_resume import resume_parser
 
+google_api_key = st.secrets["GOOGLE_API_KEY"]
+cohere_api_key = st.secrets["COHERE_API_KEY"]
+
 #--------------------------------------------LLM (Gemini pro) API-----------------------------------------------------------#
 # load gemini pro LLM model API from environment variable
 load_dotenv()
-genai.configure(api_key=os.getenv("GOOGLE_API_KEY"))
+genai.configure(api_key=google_api_key)
 
 def get_gemini_response(input,pdf_content,prompt):
     generation_config = {
@@ -137,7 +140,6 @@ def input_pdf_text(uploaded_file):
     return text
 #---------------------------------------------------Rerank---------------------------------------------------------#
 #
-cohere_api_key=os.getenv("COHERE_API_KEY")
 co = cohere.Client(cohere_api_key)
 def rerank_results(co, query, docs, n = 3):
     results = co.rerank(model = 'rerank-english-v2.0', query = query, documents = docs, top_n = n)
