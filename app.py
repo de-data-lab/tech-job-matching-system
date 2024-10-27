@@ -1,7 +1,7 @@
-# __import__('pysqlite3')
+__import__('pysqlite3')
 import sys
-# sys.modules['sqlite3'] = sys.modules.pop('pysqlite3')
-# from dotenv import load_dotenv
+sys.modules['sqlite3'] = sys.modules.pop('pysqlite3')
+from dotenv import load_dotenv
 import json
 import os, time
 from os import path, listdir
@@ -18,15 +18,13 @@ from parse_resume import resume_parser
 
 #--------------------------------------------LLM (Gemini pro) API-----------------------------------------------------------#
 # load gemini pro LLM model API from environment variable
-# load_dotenv() not needed as it is already stored environment variable in my system, use os.environ
-genai.configure(api_key=os.getenv("GEMINI_API_KEY"))
+load_dotenv()
+genai.configure(api_key=os.getenv("GOOGLE_API_KEY"))
 
 def get_gemini_response(input,pdf_content,prompt):
-    # the higher temperature, more creative responses you will get
     generation_config = {
         "temperature": 0.0
     }
-    # remove automated response blocking
     safety_settings={
         HarmCategory.HARM_CATEGORY_HATE_SPEECH: HarmBlockThreshold.BLOCK_NONE,
         HarmCategory.HARM_CATEGORY_HARASSMENT: HarmBlockThreshold.BLOCK_NONE,
@@ -38,16 +36,14 @@ def get_gemini_response(input,pdf_content,prompt):
     results = ''
     try:
         if input:
-        # The output is a single piece of generated text that takes into account all the input components provided in the list.
             response=model.generate_content([prompt,'job description:'+input,'resume:'+pdf_content], generation_config=generation_config)
         else:
             response=model.generate_content([prompt, 'resume:'+pdf_content], safety_settings=safety_settings)
         results = response.text
-    # for some prompts Gemini will avoid generating the results even if you set all the filters to none.
     except ValueError:
         # If the response doesn't contain text, check if the prompt was blocked.
         st.write(response.prompt_feedback)
-        # Also check the finish reason to see if the response was blocked, if so, will show 'FinishReason.SAFETY'
+        # Also check the finish reason to see if the response was blocked.
         st.write(response.candidates[0].finish_reason)
         # If the finish reason was SAFETY, the safety ratings have more details.
         st.write(response.candidates[0].safety_ratings)
@@ -95,67 +91,39 @@ Please limit the word count of cover letter no more than 300 words.
 #---------------------------------------------------Vector Database-------------------------------------------------------#
 
 # Get vector database collection from local storage
-chroma_client = chromadb.PersistentClient(path='.')
+chroma_client = chromadb.PersistentClient(path='database/')
 default_ef = embedding_functions.DefaultEmbeddingFunction()
 collection = chroma_client.get_collection(name="job_postings")
 
 # Find the most relevant job description and return the job posting information 
-def get_relevant_ids(query, db, count=3, exclude_citizen_only = False, year_min = 0, year_max = 30):
-    # yl: optimized logic based on 'exclude_citizen_only' (no filter at the beginning)
-    where = {   
-            # $and return results that match all of the filters in the list 
-            "$and": [
-        
-            {
-                "minimum": {
-                    "$lte": year_max
-                }
-            },
-            {
-                "minimum": {
-                    "$gte": year_min
-                }
-            }
-        ]     
-    }
-    # yl: optimized logic based on 'exclude_citizen_only' (add filter if want to exlude citizen only jobs)
-    if exclude_citizen_only:
-        where["$and"].append(
-                        {
-                            # citizen is equal to FALSE
-                            "citizen": {
-                                "$eq": False
-                            }
-                        }
-                      )    
-
+def get_relevant_ids(query, db, count=3, citizen_required = False and True, year_min = 0, year_max = 30):
     passage = db.query(query_texts=[query],
                      n_results=count, 
                      include = ["distances", "documents", "metadatas"],
-                     # where filter is used to filter by metadata, must supply a filter dictionary
-                     where=where
+                     where={    
+                       "$and": [
+                      {
+                          "citizen": {
+                              "$eq": citizen_required
+                          }
+                      },
+                      {
+                          "minimum": {
+                              "$lte": year_max
+                          }
+                      },
+                      {
+                          "minimum": {
+                              "$gte": year_min
+                          }
+                      }
+                     ] }
                      )
-    # the outer list only contains one element (another list), so [0] effectively flattens this 2D structure into a 1D list
     ids = passage['ids'][0]
     cos = passage['distances'][0]
     doc = passage['documents'][0]
     metadata = passage['metadatas'][0]
     return ids, cos, doc, metadata
-
-# query results example
-# {
-#   'documents': [[
-#       'This is a document about pineapple',
-#       'This is a document about oranges'
-#   ]],
-#   'ids': [['id1', 'id2']],
-#   'distances': [[1.0404009819030762, 1.243080496788025]],
-#   'uris': None,
-#   'data': None,
-#   'metadatas': [[None, None]],
-#   'embeddings': None,
-# }
-
 
 # Upload resume
 resume = ''
@@ -184,71 +152,48 @@ st.markdown("Please be patient while waiting for the LLM-generated suggestions."
 st.divider()
 
 # Sidebar for user interaction
-# change to bool return results as mentioned in official doc
-submit = False
-exclude_citizen_only = True
-resume_summary = ''
-
+submit = None
 with st.sidebar:
-    # Using st.file_uploader does not save the file automatically
-    # help here is a tooltit next to the upload button
     uploaded_file=st.file_uploader("Upload Your Resume",type="pdf",help="Please upload the pdf, the app won't save your resume")
   
     if uploaded_file is not None:
         st.write("PDF Uploaded Successfully")
-        # get text format of uploaded resume
         resume = input_pdf_text(uploaded_file)
-        # parsed resume and extracted info including summary, skills, experience and education as a single str
         resume_parsed = resume_parser(resume)
         resume_summary = get_gemini_response(input = None,pdf_content = resume_parsed,prompt = input_prompt_resume_summary)
 
     result_count = st.number_input('Results count', 1, 100, 30)
-    # inserts a blank line or a small amount of vertical space in the Streamlit app (add a bit of spacing between widgets)
     st.write('')
 
     citizenship_included = st.checkbox('Include US citizen only job')
     if citizenship_included:
-        exclude_citizen_only = False
+        citizen_required = False
+    else:
+        citizen_required = False and True
 
     cohere_included = st.checkbox('Include Cohere reranking (More time needed)')
 
     year_min = st.slider('Minimum years of experience required', 0, 20, 0)
     year_max = st.slider('Maximum years of experience required', 0, 20, 20)
 
-    submit = st.button("Generate LLM-powered results")
-    if submit and resume_summary != '':
+    if resume != '':
+        resume_parsed = resume_parser(resume)
+        resume_summary = get_gemini_response(input = None,pdf_content = resume_parsed,prompt = input_prompt_resume_summary)
+        submit = st.button("Generate LLM-powered results")
         st.markdown('## Resume Summary:')
         st.markdown(resume_summary)
 
-# Show results 
-# not inside sidebar
-if submit and resume_summary != '':
+# Show results
+if submit:
     # Print summarized resume by LLM
     # Perform embedding search with vector database
-    # return ids, cos, doc, metadata values (results=ids, scores=cos similarity or distance, doc=doc, meta=metadata)
-    results, scores, doc, meta = get_relevant_ids(resume_summary, collection, result_count, exclude_citizen_only, year_min, year_max)
+    results, scores, doc, meta = get_relevant_ids(resume_summary, collection, result_count, citizen_required, year_min, year_max)
     if cohere_included:
         rerank_results = rerank_results(co, query = resume_summary, docs = doc, n = result_count)
 
     
-    st.markdown('## Matched jobs')
-    # All the elements inside this container are grouped together in the layout.
+    st.markdown('## Matched jobs')    
     with st.container():
-        # results is a list of dictionaries like this
-        # "results": [
-        #     {
-        #       "index": 3,
-        #       "relevance_score": 0.999071
-        #     },
-        #     {
-        #       "index": 4,
-        #       "relevance_score": 0.7867867
-        #     },
-        #     {
-        #       "index": 0,
-        #       "relevance_score": 0.32713068
-        #     }
-        #   ]
         for index in range(len(results)):
             if cohere_included:
                 i = rerank_results.results[index].index
@@ -256,8 +201,7 @@ if submit and resume_summary != '':
             else:
                 i = index	
                 score = 1 - scores[i]
-		    # Insert a multi-element container that can be expanded/collapsed.
-            # doc[i] is each job's description when generate vectors in chromadb
+		    
             with st.expander(meta[i]['info']):
                 st.markdown(f'Similarity score: %.2f' %(score))
                 st.markdown('**Job Description**')
