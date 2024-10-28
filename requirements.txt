@@ -6,5 +6,5 @@ streamlit
 PyPDF2
 google-generativeai
 python-dotenv
-chromadb == 0.5.4
+chromadb == 0.5.3
 cohere

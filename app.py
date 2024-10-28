@@ -16,18 +16,17 @@ import cohere
 from chromadb.utils import embedding_functions
 from parse_resume import resume_parser
 
-google_api_key = st.secrets["GOOGLE_API_KEY"]
-cohere_api_key = st.secrets["COHERE_API_KEY"]
-
 #--------------------------------------------LLM (Gemini pro) API-----------------------------------------------------------#
 # load gemini pro LLM model API from environment variable
 load_dotenv()
-genai.configure(api_key=google_api_key)
+genai.configure(api_key=os.getenv("GEMINI_API_KEY"))
 
-def get_gemini_response(input,pdf_content,prompt):
+
+def get_gemini_response(input, pdf_content, prompt):
     generation_config = {
         "temperature": 0.0
     }
+
     safety_settings={
         HarmCategory.HARM_CATEGORY_HATE_SPEECH: HarmBlockThreshold.BLOCK_NONE,
         HarmCategory.HARM_CATEGORY_HARASSMENT: HarmBlockThreshold.BLOCK_NONE,
@@ -39,9 +38,9 @@ def get_gemini_response(input,pdf_content,prompt):
     results = ''
     try:
         if input:
-            response=model.generate_content([prompt,'job description:'+input,'resume:'+pdf_content], generation_config=generation_config)
+            response = model.generate_content([prompt,'job description:' + input, 'resume:' + pdf_content], generation_config=generation_config)
         else:
-            response=model.generate_content([prompt, 'resume:'+pdf_content], safety_settings=safety_settings)
+            response = model.generate_content([prompt, 'resume:' + pdf_content], safety_settings=safety_settings)
         results = response.text
     except ValueError:
         # If the response doesn't contain text, check if the prompt was blocked.
@@ -99,29 +98,30 @@ default_ef = embedding_functions.DefaultEmbeddingFunction()
 collection = chroma_client.get_collection(name="job_postings")
 
 # Find the most relevant job description and return the job posting information 
-def get_relevant_ids(query, db, count=3, citizen_required = False and True, year_min = 0, year_max = 30):
-    passage = db.query(query_texts=[query],
-                     n_results=count, 
-                     include = ["distances", "documents", "metadatas"],
-                     where={    
-                       "$and": [
-                      {
-                          "citizen": {
-                              "$eq": citizen_required
-                          }
-                      },
-                      {
-                          "minimum": {
-                              "$lte": year_max
-                          }
-                      },
-                      {
-                          "minimum": {
-                              "$gte": year_min
-                          }
-                      }
-                     ] }
-                     )
+def get_relevant_ids(query, db, count=3, citizen_required = False, year_min = 0, year_max = 30):
+    passage = db.query(
+                query_texts = [query],
+                n_results = count, 
+                include = ["distances", "documents", "metadatas"],
+                where={    
+                    "$and": [
+                    {
+                        "citizen": {
+                            "$eq": citizen_required
+                        }
+                    },
+                    {
+                        "minimum": {
+                            "$lte": year_max
+                        }
+                    },
+                    {
+                        "minimum": {
+                            "$gte": year_min
+                        }
+                    }
+                    ] }
+                    )
     ids = passage['ids'][0]
     cos = passage['distances'][0]
     doc = passage['documents'][0]
@@ -132,15 +132,15 @@ def get_relevant_ids(query, db, count=3, citizen_required = False and True, year
 resume = ''
 @st.cache_data
 def input_pdf_text(uploaded_file):
-    reader=pdf.PdfReader(uploaded_file)
-    text=""
+    reader = pdf.PdfReader(uploaded_file)
+    text = ""
     for page in range(len(reader.pages)):
-        page=reader.pages[page]
-        text+=str(page.extract_text())
+        page = reader.pages[page]
+        text += str(page.extract_text())
     return text
+
 #---------------------------------------------------Rerank---------------------------------------------------------#
-#
-co = cohere.Client(cohere_api_key)
+co = cohere.Client(os.getenv("COHERE_API_KEY"))
 def rerank_results(co, query, docs, n = 3):
     results = co.rerank(model = 'rerank-english-v2.0', query = query, documents = docs, top_n = n)
     return results
@@ -156,31 +156,30 @@ st.divider()
 # Sidebar for user interaction
 submit = None
 with st.sidebar:
-    uploaded_file=st.file_uploader("Upload Your Resume",type="pdf",help="Please upload the pdf, the app won't save your resume")
+    uploaded_file = st.file_uploader("Upload Your Resume", type="pdf", help="Please upload the pdf, the app won't save your resume")
   
     if uploaded_file is not None:
         st.write("PDF Uploaded Successfully")
         resume = input_pdf_text(uploaded_file)
         resume_parsed = resume_parser(resume)
-        resume_summary = get_gemini_response(input = None,pdf_content = resume_parsed,prompt = input_prompt_resume_summary)
+        resume_summary = get_gemini_response(input = None, pdf_content = resume_parsed, prompt = input_prompt_resume_summary)
 
-    result_count = st.number_input('Results count', 1, 100, 30)
+    result_count = st.number_input('Results count', 1, 50, 20)
     st.write('')
 
-    citizenship_included = st.checkbox('Include US citizen only job')
-    if citizenship_included:
-        citizen_required = False
+    if st.checkbox('Include US citizen only job'):
+        included_citizen_job = True
     else:
-        citizen_required = False and True
+        included_citizen_job = False
 
-    cohere_included = st.checkbox('Include Cohere reranking (More time needed)')
+    cohere_enabled = st.checkbox('Include Cohere reranking (More time needed)')
 
     year_min = st.slider('Minimum years of experience required', 0, 20, 0)
     year_max = st.slider('Maximum years of experience required', 0, 20, 20)
 
     if resume != '':
         resume_parsed = resume_parser(resume)
-        resume_summary = get_gemini_response(input = None,pdf_content = resume_parsed,prompt = input_prompt_resume_summary)
+        resume_summary = get_gemini_response(input = None, pdf_content = resume_parsed, prompt = input_prompt_resume_summary)
         submit = st.button("Generate LLM-powered results")
         st.markdown('## Resume Summary:')
         st.markdown(resume_summary)
@@ -189,15 +188,15 @@ with st.sidebar:
 if submit:
     # Print summarized resume by LLM
     # Perform embedding search with vector database
-    results, scores, doc, meta = get_relevant_ids(resume_summary, collection, result_count, citizen_required, year_min, year_max)
-    if cohere_included:
+    results, scores, doc, meta = get_relevant_ids(resume_summary, collection, result_count, included_citizen_job, year_min, year_max)
+    if cohere_enabled:
         rerank_results = rerank_results(co, query = resume_summary, docs = doc, n = result_count)
 
     
     st.markdown('## Matched jobs')    
     with st.container():
         for index in range(len(results)):
-            if cohere_included:
+            if cohere_enabled:
                 i = rerank_results.results[index].index
                 score = rerank_results.results[index].relevance_score
             else:
@@ -210,7 +209,7 @@ if submit:
                 st.write(doc[i])
                 st.link_button("Apply it!", meta[i]['link'], type="primary")
 
-                response=get_gemini_response(doc[i],resume,input_prompt_resume1)
+                response = get_gemini_response(doc[i], resume, input_prompt_resume1)
                 st.subheader("Disqualifications")
                 st.write(response) 
       #           try:
@@ -218,16 +217,16 @@ if submit:
       #           except ValueError:
       #               # If the response doesn't contain text, check if the prompt was blocked.
       #               st.write(response.prompt_feedback)
-		    # # Also check the finish reason to see if the response was blocked.
+	  # # Also check the finish reason to see if the response was blocked.
       #               st.write(response.candidates[0].finish_reason)
-		    # # If the finish reason was SAFETY, the safety ratings have more details.
+	  # # If the finish reason was SAFETY, the safety ratings have more details.
       #               st.write(response.candidates[0].safety_ratings)    
 
-                response=get_gemini_response(doc[i],resume,input_prompt_resume2)
+                response=get_gemini_response(doc[i], resume, input_prompt_resume2)
                 st.subheader("Skills you may want to add")
                 st.write(response)
 
-                response=get_gemini_response(doc[i],resume,input_prompt_cover_letter)
+                response=get_gemini_response(doc[i], resume, input_prompt_cover_letter)
                 st.subheader("Coverletter")
                 st.write(response)
 
